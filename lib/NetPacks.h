@@ -13,7 +13,7 @@
 #include "ResourceSet.h"
 //#include "CObstacleInstance.h"
 #include "CGameStateFwd.h"
-#include "mapping/CMap.h"
+#include "mapping/CMapDefines.h"
 #include "CObstacleInstance.h"
 
 #include "spells/ViewSpellInt.h"
@@ -331,9 +331,6 @@ struct SetAvailableHeroes : public CPackForClient //113
 		for (int i = 0; i < GameConstants::AVAILABLE_HEROES_PER_PLAYER; i++)
 			army[i].clear();
 	}
-	~SetAvailableHeroes()
-	{
-	}
 	void applyCl(CClient *cl);
 	DLL_LINKAGE void applyGs(CGameState *gs);
 
@@ -366,6 +363,7 @@ struct GiveBonus :  public CPackForClient //115
 	template <typename Handler> void serialize(Handler &h, const int version)
 	{
 		h & bonus & id & bdescr & who;
+		assert( id != -1);
 	}
 };
 
@@ -445,7 +443,7 @@ struct UpdateCampaignState : public CPackForClient //119
 		type = 119;
 	}
 
-	shared_ptr<CCampaignState> camp;
+	std::shared_ptr<CCampaignState> camp;
 	void applyCl(CClient *cl);
 
 	template <typename Handler> void serialize(Handler &h, const int version)
@@ -1221,7 +1219,7 @@ struct TeleportDialog : public Query//2006
 
 	const CGHeroInstance *hero;
 	TeleportChannelID channel;
-	std::vector<ObjectInstanceID> exits;
+	TTeleportExitsList exits;
 	bool impassable;
 
 	template <typename Handler> void serialize(Handler &h, const int version)
@@ -1683,7 +1681,7 @@ struct BattleObstaclePlaced : public CPackForClient //3020
 	DLL_LINKAGE void applyGs(CGameState *gs); //effect
 	void applyCl(CClient *cl); //play animations & stuff
 
-	shared_ptr<CObstacleInstance> obstacle;
+	std::shared_ptr<CObstacleInstance> obstacle;
 
 	template <typename Handler> void serialize(Handler &h, const int version)
 	{

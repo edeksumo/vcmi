@@ -37,6 +37,7 @@
 #include "../lib/CStopWatch.h"
 #include "../lib/StartInfo.h"
 #include "../lib/CGameState.h"
+#include "../lib/CPlayerState.h"
 #include "../lib/GameConstants.h"
 #include "gui/CGuiHandler.h"
 #include "windows/InfoWindows.h"
@@ -97,6 +98,7 @@ CPlayerInterface::CPlayerInterface(PlayerColor Player)
 {
 	logGlobal->traceStream() << "\tHuman player interface for player " << Player << " being constructed";
 	destinationTeleport = ObjectInstanceID();
+	destinationTeleportPos = int3(-1);
 	observerInDuelMode = false;
 	howManyPeople++;
 	GH.defActionsDef = 0;
@@ -117,7 +119,7 @@ CPlayerInterface::CPlayerInterface(PlayerColor Player)
 	isAutoFightOn = false;
 
 	duringMovement = false;
-	ignoreEvents = false;	
+	ignoreEvents = false;
 }
 
 CPlayerInterface::~CPlayerInterface()
@@ -131,7 +133,7 @@ CPlayerInterface::~CPlayerInterface()
 	if(LOCPLINT == this)
 		LOCPLINT = nullptr;
 }
-void CPlayerInterface::init(shared_ptr<CCallback> CB)
+void CPlayerInterface::init(std::shared_ptr<CCallback> CB)
 {
 	cb = CB;
 	if(observerInDuelMode)
@@ -155,24 +157,30 @@ void CPlayerInterface::yourTurn()
 		GH.curInt = this;
 		adventureInt->selection = nullptr;
 
+		std::string prefix = "";
+		if(settings["testing"]["enabled"].Bool())
+		{
+			prefix = settings["testing"]["prefix"].String();
+		}
+
 		if(firstCall)
 		{
 			if(howManyPeople == 1)
 				adventureInt->setPlayer(playerID);
 
-			autosaveCount = getLastIndex("Autosave_");
+			autosaveCount = getLastIndex(prefix + "Autosave_");
 
 			if(firstCall > 0) //new game, not loaded
 			{
-				int index = getLastIndex("Newgame_Autosave_");
+				int index = getLastIndex(prefix + "Newgame_");
 				index %= SAVES_COUNT;
-				cb->save("Saves/Newgame_Autosave_" + boost::lexical_cast<std::string>(index + 1));
+				cb->save("Saves/" + prefix + "Newgame_Autosave_" + boost::lexical_cast<std::string>(index + 1));
 			}
 			firstCall = 0;
 		}
 		else
 		{
-			LOCPLINT->cb->save("Saves/Autosave_" + boost::lexical_cast<std::string>(autosaveCount++ + 1));
+			LOCPLINT->cb->save("Saves/" + prefix + "Autosave_" + boost::lexical_cast<std::string>(autosaveCount++ + 1));
 			autosaveCount %= 5;
 		}
 
@@ -639,6 +647,8 @@ void CPlayerInterface::battleStart(const CCreatureSet *army1, const CCreatureSet
 		autofightingAI->battleStart(army1, army2, int3(0,0,0), hero1, hero2, side);
 		isAutoFightOn = true;
 		cb->registerBattleInterface(autofightingAI);
+		// Player shouldn't be able to move on adventure map if quick combat is going
+		adventureInt->quickCombatLock();
 	}
 
 	//Don't wait for dialogs when we are non-active hot-seat player
@@ -814,16 +824,16 @@ BattleAction CPlayerInterface::activeStack(const CStack * stack) //called when i
 	//tidy up
 	BattleAction ret = *(b->givenCommand->data);
 	vstd::clear_pointer(b->givenCommand->data);
-	
+
 	if(ret.actionType == Battle::CANCEL)
 	{
 		if(stackId != ret.stackNumber)
 			logGlobal->error("Not current active stack action canceled");
-		logGlobal->traceStream() << "Canceled command for " << stackName;			
+		logGlobal->traceStream() << "Canceled command for " << stackName;
 	}
 	else
 		logGlobal->traceStream() << "Giving command for " << stackName;
-		
+
 	return ret;
 }
 
@@ -835,6 +845,7 @@ void CPlayerInterface::battleEnd(const BattleResult *br)
 		isAutoFightOn = false;
 		cb->unregisterBattleInterface(autofightingAI);
 		autofightingAI.reset();
+		adventureInt->quickCombatUnlock();
 
 		if(!battleInt)
 		{
@@ -1147,14 +1158,15 @@ void CPlayerInterface::showBlockingDialog( const std::string &text, const std::v
 
 }
 
-void CPlayerInterface::showTeleportDialog(TeleportChannelID channel, std::vector<ObjectInstanceID> exits, bool impassable, QueryID askID)
+void CPlayerInterface::showTeleportDialog(TeleportChannelID channel, TTeleportExitsList exits, bool impassable, QueryID askID)
 {
 	EVENT_HANDLER_CALLED_BY_CLIENT;
-	ObjectInstanceID choosenExit;
-	if(destinationTeleport != ObjectInstanceID() && vstd::contains(exits, destinationTeleport))
-		choosenExit = destinationTeleport;
+	int choosenExit = -1;
+	auto neededExit = std::make_pair(destinationTeleport, destinationTeleportPos);
+	if(destinationTeleport != ObjectInstanceID() && vstd::contains(exits, neededExit))
+		choosenExit = vstd::find_pos(exits, neededExit);
 
-	cb->selectionMade(choosenExit.getNum(), askID);
+	cb->selectionMade(choosenExit, askID);
 }
 
 void CPlayerInterface::tileRevealed(const std::unordered_set<int3, ShashInt3> &pos)
@@ -1288,7 +1300,7 @@ template <typename Handler> void CPlayerInterface::serializeTempl( Handler &h, c
 			for(auto &p : pathsMap)
 			{
 				CGPath path;
-				cb->getPathsInfo(p.first)->getPath(p.second, path);
+				cb->getPathsInfo(p.first)->getPath(path, p.second);
 				paths[p.first] = path;
 				logGlobal->traceStream() << boost::format("Restored path for hero %s leading to %s with %d nodes")
 					% p.first->nodeName() % p.second % path.nodes.size();
@@ -1323,7 +1335,7 @@ void CPlayerInterface::moveHero( const CGHeroInstance *h, CGPath path )
 	if(showingDialog->get() || !dialogs.empty())
 		return;
 
-	duringMovement = true;
+	setMovementStatus(true);
 
 	if (adventureInt && adventureInt->isHeroSleeping(h))
 	{
@@ -1335,8 +1347,6 @@ void CPlayerInterface::moveHero( const CGHeroInstance *h, CGPath path )
 	}
 
 	boost::thread moveHeroTask(std::bind(&CPlayerInterface::doMoveHero,this,h,path));
-
-
 }
 
 bool CPlayerInterface::shiftPressed() const
@@ -1414,6 +1424,7 @@ void CPlayerInterface::requestRealized( PackageApplied *pa )
 	   && stillMoveHero.get() == DURING_MOVE)
 	{ // After teleportation via CGTeleport object is finished
 		destinationTeleport = ObjectInstanceID();
+		destinationTeleportPos = int3(-1);
 		stillMoveHero.setn(CONTINUE_MOVE);
 	}
 }
@@ -1546,6 +1557,7 @@ void CPlayerInterface::centerView (int3 pos, int focusTime)
 {
 	EVENT_HANDLER_CALLED_BY_CLIENT;
 	waitWhileDialog();
+	CCS->curh->hide();
 	adventureInt->centerOn (pos);
 	if(focusTime)
 	{
@@ -1556,6 +1568,7 @@ void CPlayerInterface::centerView (int3 pos, int focusTime)
 			SDL_Delay(focusTime);
 		}
 	}
+	CCS->curh->show();
 }
 
 void CPlayerInterface::objectRemoved( const CGObjectInstance *obj )
@@ -1597,11 +1610,11 @@ void CPlayerInterface::update()
 {
 	// Make sure that gamestate won't change when GUI objects may obtain its parts on event processing or drawing request
 	boost::shared_lock<boost::shared_mutex> gsLock(cb->getGsMutex());
-	
-	// While mutexes were locked away we may be have stopped being the active interface	
+
+	// While mutexes were locked away we may be have stopped being the active interface
 	if(LOCPLINT != this)
 		return;
-	
+
 	//if there are any waiting dialogs, show them
 	if((howManyPeople <= 1 || makingTurn) && !dialogs.empty() && !showingDialog->get())
 	{
@@ -2157,7 +2170,7 @@ void CPlayerInterface::showPuzzleMap()
 
 	//TODO: interface should not know the real position of Grail...
 	double ratio = 0;
-	int3 grailPos = cb->getGrailPos(ratio);
+	int3 grailPos = cb->getGrailPos(&ratio);
 
 	GH.pushInt(new CPuzzleWindow(grailPos, ratio));
 }
@@ -2182,7 +2195,7 @@ void CPlayerInterface::advmapSpellCast(const CGHeroInstance * caster, int spellI
 		int level = caster->getSpellSchoolLevel(spell);
 		adventureInt->worldViewOptions.showAllTerrain = (level>2);
 	}
-	
+
 	auto castSoundPath = spell->getCastSound();
 	if (!castSoundPath.empty())
 		CCS->soundh->playSound(castSoundPath);
@@ -2226,7 +2239,7 @@ CGPath * CPlayerInterface::getAndVerifyPath(const CGHeroInstance * h)
 		{
 			assert(h->getPosition(false) == path.startPos());
 			//update the hero path in case of something has changed on map
-			if(LOCPLINT->cb->getPathsInfo(h)->getPath(path.endPos(), path))
+			if(LOCPLINT->cb->getPathsInfo(h)->getPath(path, path.endPos()))
 				return &path;
 			else
 				paths.erase(h);
@@ -2238,8 +2251,10 @@ CGPath * CPlayerInterface::getAndVerifyPath(const CGHeroInstance * h)
 
 void CPlayerInterface::acceptTurn()
 {
+	bool centerView = true;
 	if(settings["session"]["autoSkip"].Bool())
 	{
+		centerView = false;
 		while(CInfoWindow *iw = dynamic_cast<CInfoWindow *>(GH.topInt()))
 			iw->close();
 	}
@@ -2266,10 +2281,10 @@ void CPlayerInterface::acceptTurn()
 	//select first hero if available.
 	if(heroToSelect != nullptr)
 	{
-		adventureInt->select(heroToSelect);
+		adventureInt->select(heroToSelect, centerView);
 	}
 	else
-		adventureInt->select(towns.front());
+		adventureInt->select(towns.front(), centerView);
 
 	//show new day animation and sound on infobar
 	adventureInt->infoBar.showDate();
@@ -2315,23 +2330,22 @@ void CPlayerInterface::tryDiggging(const CGHeroInstance *h)
 {
 	std::string hlp;
 	CGI->mh->getTerrainDescr(h->getPosition(false), hlp, false);
+	auto isDiggingPossible = h->diggingStatus();
+	if(hlp.length())
+		isDiggingPossible = EDiggingStatus::TILE_OCCUPIED; //TODO integrate with canDig
 
 	int msgToShow = -1;
-	CGHeroInstance::ECanDig isDiggingPossible = h->diggingStatus();
-	if(hlp.length())
-		isDiggingPossible = CGHeroInstance::TILE_OCCUPIED; //TODO integrate with canDig
-
 	switch(isDiggingPossible)
 	{
-	case CGHeroInstance::CAN_DIG:
+	case EDiggingStatus::CAN_DIG:
 		break;
-	case CGHeroInstance::LACK_OF_MOVEMENT:
+	case EDiggingStatus::LACK_OF_MOVEMENT:
 		msgToShow = 56; //"Digging for artifacts requires a whole day, try again tomorrow."
 		break;
-	case CGHeroInstance::TILE_OCCUPIED:
+	case EDiggingStatus::TILE_OCCUPIED:
 		msgToShow = 97; //Try searching on clear ground.
 		break;
-	case CGHeroInstance::WRONG_TERRAIN:
+	case EDiggingStatus::WRONG_TERRAIN:
 		msgToShow = 60; ////Try looking on land!
 		break;
 	default:
@@ -2496,9 +2510,20 @@ void CPlayerInterface::stacksRebalanced(const StackLocation &src, const StackLoc
 	garrisonsChanged(objects);
 }
 
+void CPlayerInterface::askToAssembleArtifact(const ArtifactLocation &al)
+{
+	auto hero = dynamic_cast<const CGHeroInstance*>(al.relatedObj());
+	if(hero)
+	{
+		CArtPlace::askToAssemble(hero->getArt(al.slot), al.slot, hero);
+	}
+}
+
 void CPlayerInterface::artifactPut(const ArtifactLocation &al)
 {
 	EVENT_HANDLER_CALLED_BY_CLIENT;
+	adventureInt->infoBar.showSelection();
+	askToAssembleArtifact(al);
 }
 
 void CPlayerInterface::artifactRemoved(const ArtifactLocation &al)
@@ -2523,6 +2548,7 @@ void CPlayerInterface::artifactMoved(const ArtifactLocation &src, const Artifact
 		if(artWin)
 			artWin->artifactMoved(src, dst);
 	}
+	askToAssembleArtifact(dst);
 }
 
 void CPlayerInterface::artifactAssembled(const ArtifactLocation &al)
@@ -2618,12 +2644,50 @@ bool CPlayerInterface::capturedAllEvents()
 	return false;
 }
 
+void CPlayerInterface::setMovementStatus(bool value)
+{
+	duringMovement = value;
+	if(value)
+	{
+		CCS->curh->hide();
+	}
+	else
+	{
+		CCS->curh->show();
+	}
+}
+
 void CPlayerInterface::doMoveHero(const CGHeroInstance * h, CGPath path)
 {
 	int i = 1;
 	auto getObj = [&](int3 coord, bool ignoreHero)
 	{
 		return cb->getTile(CGHeroInstance::convertPosition(coord,false))->topVisitableObj(ignoreHero);
+	};
+
+	auto isTeleportAction = [&](CGPathNode::ENodeAction action) -> bool
+	{
+		if(action != CGPathNode::TELEPORT_NORMAL &&
+			action != CGPathNode::TELEPORT_BLOCKING_VISIT &&
+			action != CGPathNode::TELEPORT_BATTLE)
+		{
+			return false;
+		}
+
+		return true;
+	};
+
+	auto getDestTeleportObj = [&](const CGObjectInstance * currentObject, const CGObjectInstance * nextObjectTop, const CGObjectInstance * nextObject) -> const CGObjectInstance *
+	{
+		if(CGTeleport::isConnected(currentObject, nextObjectTop))
+			return nextObjectTop;
+		if(nextObjectTop && nextObjectTop->ID == Obj::HERO &&
+			CGTeleport::isConnected(currentObject, nextObject))
+		{
+			return nextObject;
+		}
+
+		return nullptr;
 	};
 
 	boost::unique_lock<boost::mutex> un(stillMoveHero.mx);
@@ -2642,17 +2706,37 @@ void CPlayerInterface::doMoveHero(const CGHeroInstance * h, CGPath path)
 		ETerrainType newTerrain;
 		int sh = -1;
 
-		for(i=path.nodes.size()-1; i>0 && (stillMoveHero.data == CONTINUE_MOVE); i--)
+		auto canStop = [&](CGPathNode * node) -> bool
+		{
+			if(node->layer == EPathfindingLayer::LAND || node->layer == EPathfindingLayer::SAIL)
+				return true;
+
+			if(node->accessible == CGPathNode::ACCESSIBLE)
+				return true;
+
+			return false;
+		};
+
+		for(i=path.nodes.size()-1; i>0 && (stillMoveHero.data == CONTINUE_MOVE || !canStop(&path.nodes[i])); i--)
 		{
 			int3 currentCoord = path.nodes[i].coord;
 			int3 nextCoord = path.nodes[i-1].coord;
 
-			auto nextObject = getObj(nextCoord, nextCoord == h->pos);
-			if(CGTeleport::isConnected(getObj(currentCoord, currentCoord == h->pos), nextObject))
+			auto currentObject = getObj(currentCoord, currentCoord == h->pos);
+			auto nextObjectTop = getObj(nextCoord, false);
+			auto nextObject = getObj(nextCoord, true);
+			auto destTeleportObj = getDestTeleportObj(currentObject, nextObjectTop, nextObject);
+			if(isTeleportAction(path.nodes[i-1].action) && destTeleportObj != nullptr)
 			{
 				CCS->soundh->stopSound(sh);
-				destinationTeleport = nextObject->id;
+				destinationTeleport = destTeleportObj->id;
+				destinationTeleportPos = nextCoord;
 				doMovement(h->pos, false);
+				if(path.nodes[i-1].action == CGPathNode::TELEPORT_BLOCKING_VISIT)
+				{
+					destinationTeleport = ObjectInstanceID();
+					destinationTeleportPos = int3(-1);
+				}
 				sh = CCS->soundh->playSound(CCS->soundh->horseSounds[currentTerrain], -1);
 				continue;
 			}
@@ -2683,18 +2767,21 @@ void CPlayerInterface::doMoveHero(const CGHeroInstance * h, CGPath path)
 			int3 endpos(nextCoord.x, nextCoord.y, h->pos.z);
 			logGlobal->traceStream() << "Requesting hero movement to " << endpos;
 
+			bool useTransit = false;
 			if((i-2 >= 0) // Check there is node after next one; otherwise transit is pointless
-				&& (CGTeleport::isConnected(nextObject, getObj(path.nodes[i-2].coord, false))
-					|| CGTeleport::isTeleport(nextObject)))
+				&& (CGTeleport::isConnected(nextObjectTop, getObj(path.nodes[i-2].coord, false))
+					|| CGTeleport::isTeleport(nextObjectTop)))
 			{ // Hero should be able to go through object if it's allow transit
-				doMovement(endpos, true);
+				useTransit = true;
 			}
-			else
-				doMovement(endpos, false);
+			else if(path.nodes[i-1].layer == EPathfindingLayer::AIR)
+				useTransit = true;
+
+			doMovement(endpos, useTransit);
 
 			logGlobal->traceStream() << "Resuming " << __FUNCTION__;
 			bool guarded = cb->isInTheMap(cb->getGuardingCreaturePosition(endpos - int3(1, 0, 0)));
-			if(guarded || showingDialog->get() == true) // Abort movement if a guard was fought or there is a dialog to display (Mantis #1136)
+			if((!useTransit && guarded) || showingDialog->get() == true) // Abort movement if a guard was fought or there is a dialog to display (Mantis #1136)
 				break;
 		}
 
@@ -2714,15 +2801,15 @@ void CPlayerInterface::doMoveHero(const CGHeroInstance * h, CGPath path)
 		adventureInt->updateNextHero(h);
 	}
 
-	duringMovement = false;
+	setMovementStatus(false);
 }
 
 void CPlayerInterface::showWorldViewEx(const std::vector<ObjectPosInfo>& objectPositions)
 {
 	EVENT_HANDLER_CALLED_BY_CLIENT;
 	//TODO: showWorldViewEx
-	
+
 	std::copy(objectPositions.begin(), objectPositions.end(), std::back_inserter(adventureInt->worldViewOptions.iconPositions));
-	
+
 	viewWorldMap();
 }

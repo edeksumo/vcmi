@@ -7,6 +7,7 @@
 #include "mapHandler.h"
 
 #include "../lib/filesystem/Filesystem.h"
+#include "../lib/filesystem/FileStream.h"
 #include "CPreGame.h"
 #include "windows/CCastleInterface.h"
 #include "../lib/CConsoleHandler.h"
@@ -79,7 +80,7 @@ extern boost::thread_specific_ptr<bool> inGuiThread;
 SDL_Surface *screen = nullptr, //main screen surface
 	*screen2 = nullptr, //and hlp surface (used to store not-active interfaces layer)
 	*screenBuf = screen; //points to screen (if only advmapint is present) or screen2 (else) - should be used when updating controls which are not regularly redrawed
-	
+
 std::queue<SDL_Event> events;
 boost::mutex eventsM;
 
@@ -170,9 +171,9 @@ static void prog_version(void)
 static void prog_help(const po::options_description &opts)
 {
 	printf("%s - A Heroes of Might and Magic 3 clone\n", GameConstants::VCMI_VERSION.c_str());
-    printf("Copyright (C) 2007-2014 VCMI dev team - see AUTHORS file\n");
-    printf("This is free software; see the source for copying conditions. There is NO\n");
-    printf("warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n");
+	printf("Copyright (C) 2007-2016 VCMI dev team - see AUTHORS file\n");
+	printf("This is free software; see the source for copying conditions. There is NO\n");
+	printf("warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n");
 	printf("\n");
 	printf("Usage:\n");
 	std::cout << opts;
@@ -187,7 +188,7 @@ static void SDLLogCallback(void*           userdata,
 {
 	//todo: convert SDL log priority to vcmi log priority
 	//todo: make separate log domain for SDL
-	
+
 	logGlobal->debugStream() << "SDL(category " << category << "; priority " <<priority <<") "<<message;
 }
 
@@ -244,7 +245,9 @@ int main(int argc, char** argv)
         ("loadhumanplayerindices",po::value<std::vector<int>>(),"Indexes of human players (0=Red, etc.)")
         ("loadplayer", po::value<int>(),"specifies which player we are in multiplayer loaded games (0=Red, etc.)")
         ("loadserverip",po::value<std::string>(),"IP for loaded game server")
-        ("loadserverport",po::value<std::string>(),"port for loaded game server");
+		("loadserverport",po::value<std::string>(),"port for loaded game server")
+		("testingport",po::value<std::string>(),"port for testing, override specified in config file")
+		("testingfileprefix",po::value<std::string>(),"prefix for auto save files");
 
 	if(argc > 1)
 	{
@@ -281,7 +284,7 @@ int main(int argc, char** argv)
 	// it may result in very small \ very fast mouse when game in fullscreen mode
 	putenv((char*)"SDL_VIDEO_X11_DGAMOUSE=0");
 
-    // Init old logging system and new (temporary) logging system
+	// Init old logging system and new (temporary) logging system
 	CStopWatch total, pomtime;
 	std::cout.flags(std::ios::unitbuf);
 	console = new CConsoleHandler;
@@ -291,16 +294,25 @@ int main(int argc, char** argv)
 
 	const bfs::path logPath = VCMIDirs::get().userCachePath() / "VCMI_Client_log.txt";
 	CBasicLogConfigurator logConfig(logPath, console);
-    logConfig.configureDefault();
+	logConfig.configureDefault();
 	logGlobal->infoStream() << "Creating console and configuring logger: " << pomtime.getDiff();
 	logGlobal->infoStream() << "The log file will be saved to " << logPath;
 
-    // Init filesystem and settings
+	// Init filesystem and settings
 	preinitDLL(::console);
-    settings.init();
+	settings.init();
 
-    // Initialize logging based on settings
-    logConfig.configure();
+	// Init special testing settings
+	Settings testingSettings = settings.write["testing"];
+	if(vm.count("testingport") && vm.count("testingfileprefix"))
+	{
+		testingSettings["enabled"].Bool() = true;
+		testingSettings["port"].String() = vm["testingport"].as<std::string>();
+		testingSettings["prefix"].String() = vm["testingfileprefix"].as<std::string>();
+	}
+
+	// Initialize logging based on settings
+	logConfig.configure();
 
 	// Some basic data validation to produce better error messages in cases of incorrect install
 	auto testFile = [](std::string filename, std::string message) -> bool
@@ -308,13 +320,15 @@ int main(int argc, char** argv)
 		if (CResourceHandler::get()->existsResource(ResourceID(filename)))
 			return true;
 
-        logGlobal->errorStream() << "Error: " << message << " was not found!";
+		logGlobal->errorStream() << "Error: " << message << " was not found!";
 		return false;
 	};
 
 	if (!testFile("DATA/HELP.TXT", "Heroes III data") ||
-	    !testFile("MODS/VCMI/MOD.JSON", "VCMI data"))
+		!testFile("MODS/VCMI/MOD.JSON", "VCMI data"))
+	{
 		exit(1); // These are unrecoverable errors
+	}
 
 	// these two are optional + some installs have them on CD and not in data directory
 	testFile("VIDEO/GOOD1A.SMK", "campaign movies");
@@ -350,21 +364,21 @@ int main(int argc, char** argv)
 		}
 		GH.mainFPSmng->init(); //(!)init here AFTER SDL_Init() while using SDL for FPS management
 		atexit(SDL_Quit);
-		
+
 		SDL_LogSetOutputFunction(&SDLLogCallback, nullptr);
-		
+
 		int driversCount = SDL_GetNumRenderDrivers();
 		std::string preferredDriverName = video["driver"].String();
-		
+
 		logGlobal->infoStream() << "Found " << driversCount << " render drivers";
-		
+
 		for(int it = 0; it < driversCount; it++)
 		{
 			SDL_RendererInfo info;
 			SDL_GetRenderDriverInfo(it,&info);
-			
+
 			std::string driverName(info.name);
-			
+
 			if(!preferredDriverName.empty() && driverName == preferredDriverName)
 			{
 				preferredDriverIndex = it;
@@ -372,8 +386,8 @@ int main(int argc, char** argv)
 			}
 			else
 				logGlobal->infoStream() << "\t" << driverName;
-		}			
-		
+		}
+
 		config::CConfigHandler::GuiOptionsMap::key_type resPair(res["width"].Float(), res["height"].Float());
 		if (conf.guiOptions.count(resPair) == 0)
 		{
@@ -427,10 +441,15 @@ int main(int argc, char** argv)
 	CCS->musich->setVolume(settings["general"]["music"].Float());
     logGlobal->infoStream()<<"Initializing screen and sound handling: "<<pomtime.getDiff();
 
+#ifdef __APPLE__
+	// Ctrl+click should be treated as a right click on Mac OS X
+	SDL_SetHint(SDL_HINT_MAC_CTRL_CLICK_EMULATE_RIGHT_CLICK, "1");
+#endif
+
 #ifndef VCMI_NO_THREADED_LOAD
 	//we can properly play intro only in the main thread, so we have to move loading to the separate thread
 	boost::thread loading(init);
-#else	 
+#else
 	init();
 #endif
 
@@ -529,8 +548,9 @@ void processCommand(const std::string &message)
 	std::string cn; //command name
 	readed >> cn;
 
-	if(LOCPLINT && LOCPLINT->cingconsole)
-		LOCPLINT->cingconsole->print(message);
+// Check mantis issue 2292 for details
+//	if(LOCPLINT && LOCPLINT->cingconsole)
+//		LOCPLINT->cingconsole->print(message);
 
 	if(ermInteractiveMode)
 	{
@@ -618,7 +638,7 @@ void processCommand(const std::string &message)
 		for (auto & filename : list)
 		{
 			const bfs::path filePath = outPath / (filename.getName() + ".TXT");
-			
+
 			bfs::create_directories(filePath.parent_path());
 
 			bfs::ofstream file(filePath);
@@ -789,11 +809,12 @@ void processCommand(const std::string &message)
 		Settings session = settings.write["session"];
 		session["autoSkip"].Bool() = !session["autoSkip"].Bool();
 	}
-	else if(client && client->serv && client->serv->connected && LOCPLINT) //send to server
+	// Check mantis issue 2292 for details
+/* 	else if(client && client->serv && client->serv->connected && LOCPLINT) //send to server
 	{
 		boost::unique_lock<boost::recursive_mutex> un(*LOCPLINT->pim);
 		LOCPLINT->cb->sendMessage(message);
-	}
+	}*/
 }
 
 //plays intro, ends when intro is over or button has been pressed (handles events)
@@ -830,25 +851,25 @@ static bool checkVideoMode(int monitorIndex, int w, int h, int& bpp, bool fullsc
 			return true;
 		}
 	}
-	return false;	
+	return false;
 }
 
 static bool recreateWindow(int w, int h, int bpp, bool fullscreen)
 {
-	// VCMI will only work with 2 or 4 bytes per pixel	
+	// VCMI will only work with 2 or 4 bytes per pixel
 	vstd::amax(bpp, 16);
 	vstd::amin(bpp, 32);
 	if(bpp>16)
 		bpp = 32;
-	
+
 	int suggestedBpp = bpp;
 
 	if(!checkVideoMode(0,w,h,suggestedBpp,fullscreen))
 	{
 		logGlobal->errorStream() << "Error: SDL says that " << w << "x" << h << " resolution is not available!";
 		return false;
-	}	
-	
+	}
+
 	bool bufOnScreen = (screenBuf == screen);
 
 	screenBuf = nullptr; //it`s a link - just nullify
@@ -858,34 +879,34 @@ static bool recreateWindow(int w, int h, int bpp, bool fullscreen)
 		SDL_FreeSurface(screen2);
 		screen2 = nullptr;
 	}
-		
-		
+
+
 	if(nullptr != screen)
 	{
 		SDL_FreeSurface(screen);
 		screen = nullptr;
-	}	
-		
-	
+	}
+
+
 	if(nullptr != screenTexture)
 	{
 		SDL_DestroyTexture(screenTexture);
 		screenTexture = nullptr;
 	}
-	
-	if(nullptr != mainRenderer)	
+
+	if(nullptr != mainRenderer)
 	{
 		SDL_DestroyRenderer(mainRenderer);
 		mainRenderer = nullptr;
 	}
-		
+
 	if(nullptr != mainWindow)
 	{
 		SDL_DestroyWindow(mainWindow);
 		mainWindow = nullptr;
-	}	
-	
-	
+	}
+
+
 	if(fullscreen)
 	{
 		//in full-screen mode always use desktop resolution
@@ -896,33 +917,33 @@ static bool recreateWindow(int w, int h, int bpp, bool fullscreen)
 	{
 		mainWindow = SDL_CreateWindow(NAME.c_str(), SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED, w, h, 0);
 	}
-	
-	
-	
+
+
+
 	if(nullptr == mainWindow)
 	{
 		throw std::runtime_error("Unable to create window\n");
 	}
-	
-	
+
+
 	//create first available renderer if preferred not set. Use no flags, so HW accelerated will be preferred but SW renderer also will possible
 	mainRenderer = SDL_CreateRenderer(mainWindow,preferredDriverIndex,0);
 
 	if(nullptr == mainRenderer)
 	{
 		throw std::runtime_error("Unable to create renderer\n");
-	}	
-	
+	}
+
 	SDL_RendererInfo info;
 	SDL_GetRendererInfo(mainRenderer,&info);
-	logGlobal->infoStream() << "Created renderer " << info.name;	
-	
+	logGlobal->infoStream() << "Created renderer " << info.name;
+
 	SDL_RenderSetLogicalSize(mainRenderer, w, h);
-	
+
 	SDL_RenderSetViewport(mainRenderer, nullptr);
 
 
-	
+
 	#if (SDL_BYTEORDER == SDL_BIG_ENDIAN)
 		int bmask = 0xff000000;
 		int gmask = 0x00ff0000;
@@ -940,13 +961,13 @@ static bool recreateWindow(int w, int h, int bpp, bool fullscreen)
 	{
 		logGlobal->errorStream() << "Unable to create surface";
 		logGlobal->errorStream() << w << " "<<  h << " "<< bpp;
-		
+
 		logGlobal->errorStream() << SDL_GetError();
 		throw std::runtime_error("Unable to create surface");
-	}	
+	}
 	//No blending for screen itself. Required for proper cursor rendering.
 	SDL_SetSurfaceBlendMode(screen, SDL_BLENDMODE_NONE);
-	
+
 	screenTexture = SDL_CreateTexture(mainRenderer,
                                             SDL_PIXELFORMAT_ARGB8888,
                                             SDL_TEXTUREACCESS_STREAMING,
@@ -957,23 +978,23 @@ static bool recreateWindow(int w, int h, int bpp, bool fullscreen)
 		logGlobal->errorStream() << "Unable to create screen texture";
 		logGlobal->errorStream() << SDL_GetError();
 		throw std::runtime_error("Unable to create screen texture");
-	}	
-		
+	}
+
 	screen2 = CSDL_Ext::copySurface(screen);
 
 
 	if(nullptr == screen2)
 	{
 		throw std::runtime_error("Unable to copy surface\n");
-	}			
-	
+	}
+
 	screenBuf = bufOnScreen ? screen : screen2;
 
 	SDL_SetRenderDrawColor(mainRenderer, 0, 0, 0, 0);
 	SDL_RenderClear(mainRenderer);
 	SDL_RenderPresent(mainRenderer);
-		
-	return true;	
+
+	return true;
 }
 
 //used only once during initialization
@@ -982,7 +1003,7 @@ static void setScreenRes(int w, int h, int bpp, bool fullscreen, bool resetVideo
 	if(!recreateWindow(w,h,bpp,fullscreen))
 	{
 		throw std::runtime_error("Requested screen resolution is not available\n");
-	}	
+	}
 }
 
 static void fullScreenChanged()
@@ -993,16 +1014,16 @@ static void fullScreenChanged()
 	const bool toFullscreen = full->Bool();
 
 	auto bitsPerPixel = screen->format->BitsPerPixel;
-	
+
 	auto w = screen->w;
 	auto h = screen->h;
-	
+
 	if(!recreateWindow(w,h,bitsPerPixel,toFullscreen))
 	{
 		//will return false and report error if video mode is not supported
-		return;	
-	}	
-	
+		return;
+	}
+
 	GH.totalRedraw();
 }
 
@@ -1010,7 +1031,7 @@ static void handleEvent(SDL_Event & ev)
 {
 	if((ev.type==SDL_QUIT) ||(ev.type == SDL_KEYDOWN && ev.key.keysym.sym==SDLK_F4 && (ev.key.keysym.mod & KMOD_ALT)))
 	{
-		handleQuit();	
+		handleQuit();
 		return;
 	}
 	else if(ev.type == SDL_KEYDOWN && ev.key.keysym.sym==SDLK_F4)
@@ -1025,8 +1046,8 @@ static void handleEvent(SDL_Event & ev)
 		{
 		case FORCE_QUIT:
 			{
-				handleQuit(false);	
-				return;			
+				handleQuit(false);
+				return;
 			}
 		    break;
 		case RETURN_TO_MAIN_MENU:
@@ -1065,17 +1086,26 @@ static void handleEvent(SDL_Event & ev)
 			fullScreenChanged();
 			break;
 		default:
-			logGlobal->errorStream() << "Unknown user event. Code " << ev.user.code;		
-			break;	
+			logGlobal->errorStream() << "Unknown user event. Code " << ev.user.code;
+			break;
 		}
 
+		return;
+	}
+	else if(ev.type == SDL_WINDOWEVENT)
+	{
+		switch (ev.window.event) {
+		case SDL_WINDOWEVENT_RESTORED:
+			fullScreenChanged();
+			break;
+		}
 		return;
 	}
 	{
 		boost::unique_lock<boost::mutex> lock(eventsM);
 		events.push(ev);
-	}	
-	
+	}
+
 }
 
 
@@ -1090,12 +1120,12 @@ static void mainLoop()
 	while(1) //main SDL events loop
 	{
 		SDL_Event ev;
-		
+
 		while(1 == SDL_PollEvent(&ev))
 		{
 			handleEvent(ev);
 		}
-		
+
 		GH.renderFrame();
 
 	}

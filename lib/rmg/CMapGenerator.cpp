@@ -17,9 +17,11 @@ static const int3 dirs4[] = {int3(0,1,0),int3(0,-1,0),int3(-1,0,0),int3(+1,0,0)}
 
 void CMapGenerator::foreach_neighbour(const int3 &pos, std::function<void(int3& pos)> foo)
 {
-	for(const int3 &dir : dirs)
+	for(const int3 &dir : int3::getDirs())
 	{
 		int3 n = pos + dir;
+		/*important notice: perform any translation before this function is called,
+		so the actual map position is checked*/
 		if(map->isInTheMap(n))
 			foo(n);
 	}

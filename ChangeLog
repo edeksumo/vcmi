@@ -3,16 +3,26 @@
 GENERAL:
 * New Bonus NO_TERRAIN_PENALTY
 * Nomads will remove Sand movement penalty from army
+* Flying and water walking is now supported in pathfinder
+* New artifacts supported
+- Angel Wings
+- Boots of Levitation
+* Implemented rumors in tavern window
+* New cheat code:
+- vcmiglaurung - gives 5000 crystal dragons into each slot
 
 ADVETURE AI:
 * Fixed AI trying to go through underground rock
 * Fixed several cases causing AI wandering aimlessly
 * AI can again pick best artifacts and exchange artifacts between heroes
+* AI heroes with patrol enabled won't leave patrol area anymore
 
 RANDOM MAP GENERATOR:
 * Changed fractalization algorithm so it can create cycles
 * Zones will not have straight paths anymore, they are totally random
 * Added Thieves Guild random object (1 per zone)
+* Added Seer Huts with quests that match OH3
+* RMG will guarantee at least 100 pairs of Monoliths are available even if there are not enough different defs
 
 0.97 -> 0.98
 GENERAL:

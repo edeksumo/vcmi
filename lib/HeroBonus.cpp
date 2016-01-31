@@ -64,19 +64,19 @@ const std::map<std::string, Bonus::LimitEffect> bonusLimitEffect =
 
 const std::map<std::string, TLimiterPtr> bonusLimiterMap =
 {
-	{"SHOOTER_ONLY", make_shared<HasAnotherBonusLimiter>(Bonus::SHOOTER)},
-	{"DRAGON_NATURE", make_shared<HasAnotherBonusLimiter>(Bonus::DRAGON_NATURE)},
-	{"IS_UNDEAD", make_shared<HasAnotherBonusLimiter>(Bonus::UNDEAD)}
+	{"SHOOTER_ONLY", std::make_shared<HasAnotherBonusLimiter>(Bonus::SHOOTER)},
+	{"DRAGON_NATURE", std::make_shared<HasAnotherBonusLimiter>(Bonus::DRAGON_NATURE)},
+	{"IS_UNDEAD", std::make_shared<HasAnotherBonusLimiter>(Bonus::UNDEAD)}
 };
 
 const std::map<std::string, TPropagatorPtr> bonusPropagatorMap =
 {
-	{"BATTLE_WIDE", make_shared<CPropagatorNodeType>(CBonusSystemNode::BATTLE)},
-	{"VISITED_TOWN_AND_VISITOR", make_shared<CPropagatorNodeType>(CBonusSystemNode::TOWN_AND_VISITOR)},
-	{"PLAYER_PROPAGATOR", make_shared<CPropagatorNodeType>(CBonusSystemNode::PLAYER)},
-	{"HERO", make_shared<CPropagatorNodeType>(CBonusSystemNode::HERO)},
-	{"TEAM_PROPAGATOR", make_shared<CPropagatorNodeType>(CBonusSystemNode::TEAM)}, //untested
-	{"GLOBAL_EFFECT", make_shared<CPropagatorNodeType>(CBonusSystemNode::GLOBAL_EFFECTS)}
+	{"BATTLE_WIDE", std::make_shared<CPropagatorNodeType>(CBonusSystemNode::BATTLE)},
+	{"VISITED_TOWN_AND_VISITOR", std::make_shared<CPropagatorNodeType>(CBonusSystemNode::TOWN_AND_VISITOR)},
+	{"PLAYER_PROPAGATOR", std::make_shared<CPropagatorNodeType>(CBonusSystemNode::PLAYER)},
+	{"HERO", std::make_shared<CPropagatorNodeType>(CBonusSystemNode::HERO)},
+	{"TEAM_PROPAGATOR", std::make_shared<CPropagatorNodeType>(CBonusSystemNode::TEAM)}, //untested
+	{"GLOBAL_EFFECT", std::make_shared<CPropagatorNodeType>(CBonusSystemNode::GLOBAL_EFFECTS)}
 }; //untested
 
 
@@ -651,7 +651,7 @@ const TBonusListPtr CBonusSystemNode::getAllBonuses(const CSelector &selector, c
 
 		//We still don't have the bonuses (didn't returned them from cache)
 		//Perform bonus selection
-		auto ret = make_shared<BonusList>();
+		auto ret = std::make_shared<BonusList>();
 		cachedBonuses.getBonuses(*ret, selector, limit);
 
 		// Save the results in the cache
@@ -668,7 +668,7 @@ const TBonusListPtr CBonusSystemNode::getAllBonuses(const CSelector &selector, c
 
 const TBonusListPtr CBonusSystemNode::getAllBonusesWithoutCaching(const CSelector &selector, const CSelector &limit, const CBonusSystemNode *root /*= nullptr*/) const
 {
-	auto ret = make_shared<BonusList>();
+	auto ret = std::make_shared<BonusList>();
 
 	// Get bonus results without caching enabled.
 	BonusList beforeLimiting, afterLimiting;
@@ -763,8 +763,29 @@ void CBonusSystemNode::popBonuses(const CSelector &s)
 		child->popBonuses(s);
 }
 
+void CBonusSystemNode::updateBonuses(const CSelector &s)
+{
+	BonusList bl;
+	exportedBonuses.getBonuses(bl, s);
+	for(Bonus *b : bl)
+	{
+		b->turnsRemain--;
+		if(b->turnsRemain <= 0)
+			removeBonus(b);
+	}
+
+	for(CBonusSystemNode *child : children)
+		child->updateBonuses(s);
+}
+
 void CBonusSystemNode::addNewBonus(Bonus *b)
 {
+	//turnsRemain shouldn't be zero for following durations
+	if(Bonus::NTurns(b) || Bonus::NDays(b) || Bonus::OneWeek(b))
+	{
+		assert(b->turnsRemain);
+	}
+
 	assert(!vstd::contains(exportedBonuses,b));
 	exportedBonuses.push_back(b);
 	exportBonus(b);
@@ -950,18 +971,7 @@ void CBonusSystemNode::getRedDescendants(TNodes &out)
 
 void CBonusSystemNode::battleTurnPassed()
 {
-	BonusList bonusesCpy = exportedBonuses; //copy, because removing bonuses invalidates iters
-	for (auto & elem : bonusesCpy)
-	{
-		Bonus *b = elem;
-
-		if(b->duration & Bonus::N_TURNS)
-		{
-			b->turnsRemain--;
-			if(b->turnsRemain <= 0)
-				removeBonus(b);
-		}
-	}
+	updateBonuses(Bonus::NTurns);
 }
 
 void CBonusSystemNode::exportBonus(Bonus * b)
@@ -983,11 +993,6 @@ void CBonusSystemNode::exportBonuses()
 CBonusSystemNode::ENodeTypes CBonusSystemNode::getNodeType() const
 {
 	return nodeType;
-}
-
-BonusList& CBonusSystemNode::getBonusList()
-{
-	return bonuses;
 }
 
 const BonusList& CBonusSystemNode::getBonusList() const
@@ -1062,7 +1067,7 @@ void CBonusSystemNode::limitBonuses(const BonusList &allBonuses, BonusList &out)
 
 TBonusListPtr CBonusSystemNode::limitBonuses(const BonusList &allBonuses) const
 {
-	auto ret = make_shared<BonusList>();
+	auto ret = std::make_shared<BonusList>();
 	limitBonuses(allBonuses, *ret);
 	return ret;
 }
@@ -1183,6 +1188,7 @@ namespace Selector
 	DLL_LINKAGE CSelectFieldEqual<Bonus::BonusSource> sourceType(&Bonus::source);
 	DLL_LINKAGE CSelectFieldEqual<Bonus::LimitEffect> effectRange(&Bonus::effectRange);
 	DLL_LINKAGE CWillLastTurns turns;
+	DLL_LINKAGE CWillLastDays days;
 	DLL_LINKAGE CSelectFieldAny<Bonus::LimitEffect> anyRange(&Bonus::effectRange);
 
 	CSelector DLL_LINKAGE typeSubtype(Bonus::BonusType Type, TBonusSubtype Subtype)
@@ -1312,7 +1318,7 @@ Bonus * Bonus::addLimiter(TLimiterPtr Limiter)
 		if(!limiterList)
 		{
 			//Create a new limiter list with old limiter and the new one will be pushed later
-			limiterList = make_shared<LimiterList>();
+			limiterList = std::make_shared<LimiterList>();
 			limiterList->add(limiter);
 			limiter = limiterList;
 		}

@@ -14,6 +14,7 @@
 #include "../NetPacks.h"
 #include "../BattleState.h"
 #include "../mapObjects/CGHeroInstance.h"
+#include "../mapObjects/CGTownInstance.h"
 
 ///HealingSpellMechanics
 void HealingSpellMechanics::applyBattleEffects(const SpellCastEnvironment * env, const BattleSpellCastParameters & parameters, SpellCastContext & ctx) const
@@ -373,7 +374,7 @@ void ObstacleMechanics::applyBattleEffects(const SpellCastEnvironment * env, con
 									? (parameters.cb->obstacles.back()->uniqueID+1)
 									: 0;
 
-		auto obstacle = make_shared<SpellCreatedObstacle>();
+		auto obstacle = std::make_shared<SpellCreatedObstacle>();
 		switch(owner->id) // :/
 		{
 		case SpellID::QUICKSAND:

@@ -93,6 +93,19 @@ static_assert(sizeof(bool) == 1, "Bool needs to be 1 byte in size.");
 #ifdef VCMI_WINDOWS
 #  define WIN32_LEAN_AND_MEAN		// Exclude rarely-used stuff from Windows headers - delete this line if something is missing.
 #  define NOMINMAX					// Exclude min/max macros from <Windows.h>. Use std::[min/max] from <algorithm> instead.
+#  define _NO_W32_PSEUDO_MODIFIERS  // Exclude more macros for compiling with MinGW on Linux.
+#endif
+
+/* ---------------------------------------------------------------------------- */
+/* A macro to force inlining some of our functions */
+/* ---------------------------------------------------------------------------- */
+// Compiler (at least MSVC) is not so smart here-> without that displaying is MUCH slower
+#ifdef _MSC_VER
+#  define STRONG_INLINE __forceinline
+#elif __GNUC__
+#  define STRONG_INLINE inline __attribute__((always_inline))
+#else
+#  define STRONG_INLINE inline
 #endif
 
 #define _USE_MATH_DEFINES
@@ -167,9 +180,6 @@ static_assert(sizeof(bool) == 1, "Bool needs to be 1 byte in size.");
 /* ---------------------------------------------------------------------------- */
 /* Usings */
 /* ---------------------------------------------------------------------------- */
-using std::shared_ptr;
-using std::unique_ptr;
-using std::make_shared;
 using namespace std::placeholders;
 namespace range = boost::range;
 

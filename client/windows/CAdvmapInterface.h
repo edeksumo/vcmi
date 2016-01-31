@@ -74,7 +74,7 @@ public:
 	void showAll(SDL_Surface * to) override;
 	void showAnim(SDL_Surface * to);
 	void showPath(const SDL_Rect * extRect, SDL_Surface * to);
-	int3 whichTileIsIt(const int & x, const int & y); //x,y are cursor position
+	int3 whichTileIsIt(const int x, const int y); //x,y are cursor position
 	int3 whichTileIsIt(); //uses current cursor pos
 	/// @returns number of visible tiles on screen respecting current map scaling
 	int3 tileCountOnScreen();
@@ -224,6 +224,8 @@ public:
 	void aiTurnStarted();
 
 	void adjustActiveness(bool aiTurnStart); //should be called every time at AI/human turn transition; blocks GUI during AI turn
+	void quickCombatLock(); //should be called when quick battle started
+	void quickCombatUnlock();
 	void tileLClicked(const int3 &mapPos);
 	void tileHovered(const int3 &mapPos);
 	void tileRClicked(const int3 &mapPos);
@@ -235,6 +237,7 @@ public:
 	//button updates
 	void updateSleepWake(const CGHeroInstance *h);
 	void updateMoveHero(const CGHeroInstance *h, tribool hasPath = boost::logic::indeterminate);
+	void updateSpellbook(const CGHeroInstance *h);
 	void updateNextHero(const CGHeroInstance *h);
 
 	/// changes current adventure map mode; used to switch between default view and world view; scale is ignored if EAdvMapMode == NORMAL

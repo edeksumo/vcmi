@@ -18,12 +18,7 @@
 #include "lib/spells/CSpellHandler.h"
 #include "lib/CArtHandler.h"
 #include "lib/GameConstants.h"
-#ifdef min
-#undef min
-#endif
-#ifdef max
-#undef max
-#endif
+#include "lib/CPlayerState.h"
 #include "lib/UnlockGuard.h"
 
 /*
@@ -290,11 +285,6 @@ bool CCallback::canMoveBetween(const int3 &a, const int3 &b)
 	return gs->checkForVisitableDir(a, b) && gs->checkForVisitableDir(b, a);
 }
 
-int CCallback::getMovementCost(const CGHeroInstance * hero, int3 dest)
-{
-	return gs->getMovementCost(hero, hero->visitablePos(), dest, hero->movement);
-}
-
 const CPathsInfo * CCallback::getPathsInfo(const CGHeroInstance *h)
 {
 	return cl->getPathsInfo(h);
@@ -343,22 +333,22 @@ int CCallback::mergeOrSwapStacks(const CArmedInstance *s1, const CArmedInstance 
 		return swapCreatures(s1, s2, p1, p2);
 }
 
-void CCallback::registerGameInterface(shared_ptr<IGameEventsReceiver> gameEvents)
+void CCallback::registerGameInterface(std::shared_ptr<IGameEventsReceiver> gameEvents)
 {
 	cl->additionalPlayerInts[*player].push_back(gameEvents);
 }
 
-void CCallback::registerBattleInterface(shared_ptr<IBattleEventsReceiver> battleEvents)
+void CCallback::registerBattleInterface(std::shared_ptr<IBattleEventsReceiver> battleEvents)
 {
 	cl->additionalBattleInts[*player].push_back(battleEvents);
 }
 
-void CCallback::unregisterGameInterface(shared_ptr<IGameEventsReceiver> gameEvents)
+void CCallback::unregisterGameInterface(std::shared_ptr<IGameEventsReceiver> gameEvents)
 {
 	cl->additionalPlayerInts[*player] -= gameEvents;
 }
 
-void CCallback::unregisterBattleInterface(shared_ptr<IBattleEventsReceiver> battleEvents)
+void CCallback::unregisterBattleInterface(std::shared_ptr<IBattleEventsReceiver> battleEvents)
 {
 	cl->additionalBattleInts[*player] -= battleEvents;
 }

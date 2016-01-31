@@ -3,6 +3,7 @@
 #include "VCAI.h"
 #include "Fuzzy.h"
 #include "../../lib/mapping/CMap.h" //for victory conditions
+#include "../../lib/CPathfinder.h"
 
 /*
  * Goals.cpp, part of VCMI engine
@@ -18,12 +19,11 @@ extern boost::thread_specific_ptr<CCallback> cb;
 extern boost::thread_specific_ptr<VCAI> ai;
 extern FuzzyHelper * fh; //TODO: this logic should be moved inside VCAI
 
-using namespace vstd;
 using namespace Goals;
 
 TSubgoal Goals::sptr(const AbstractGoal & tmp)
 {
-	shared_ptr<AbstractGoal> ptr;
+	std::shared_ptr<AbstractGoal> ptr;
 	ptr.reset(tmp.clone());
 	return ptr;
 }
@@ -154,8 +154,8 @@ bool Goals::AbstractGoal::operator== (AbstractGoal &g)
 
 //TODO: find out why the following are not generated automatically on MVS?
 
-namespace Goals 
-{ 
+namespace Goals
+{
 	template <>
 	void CGoal<Win>::accept (VCAI * ai)
 	{
@@ -275,7 +275,7 @@ TSubgoal Win::whatToDoToAchieve()
 					// 0.85 -> radius now 2 tiles
 					// 0.95 -> 1 tile radius, position is fully known
 					// AFAIK H3 AI does something like this
-					int3 grailPos = cb->getGrailPos(ratio);
+					int3 grailPos = cb->getGrailPos(&ratio);
 					if(ratio > 0.99)
 					{
 						return sptr (Goals::DigAtTile(grailPos));
@@ -367,7 +367,7 @@ TSubgoal FindObj::whatToDoToAchieve()
 
 std::string GetObj::completeMessage() const
 {
-	return "hero " + hero.get()->name + " captured Object ID = " + boost::lexical_cast<std::string>(objid); 
+	return "hero " + hero.get()->name + " captured Object ID = " + boost::lexical_cast<std::string>(objid);
 }
 
 TSubgoal GetObj::whatToDoToAchieve()
@@ -409,7 +409,7 @@ bool GetObj::fulfillsMe (TSubgoal goal)
 
 std::string VisitHero::completeMessage() const
 {
-	return "hero " + hero.get()->name + " visited hero " + boost::lexical_cast<std::string>(objid); 
+	return "hero " + hero.get()->name + " visited hero " + boost::lexical_cast<std::string>(objid);
 }
 
 TSubgoal VisitHero::whatToDoToAchieve()
@@ -435,10 +435,18 @@ TSubgoal VisitHero::whatToDoToAchieve()
 
 bool VisitHero::fulfillsMe (TSubgoal goal)
 {
-	if (goal->goalType == Goals::VISIT_TILE && cb->getObj(ObjectInstanceID(objid))->visitablePos() == goal->tile)
-		return true;
-	else
+	if (goal->goalType != Goals::VISIT_TILE)
+	{
 		return false;
+	}
+	auto obj = cb->getObj(ObjectInstanceID(objid));
+	if (!obj)
+	{
+		logAi->errorStream() << boost::format("Hero %s: VisitHero::fulfillsMe at %s: object %d not found")
+			% hero.name % goal->tile % objid;
+		return false;
+	}
+	return obj->visitablePos() == goal->tile;
 }
 
 TSubgoal GetArtOfType::whatToDoToAchieve()
@@ -458,7 +466,7 @@ TSubgoal ClearWayTo::whatToDoToAchieve()
 		return sptr (Goals::Explore());
 	}
 
-	return (fh->chooseSolution(getAllPossibleSubgoals()));	
+	return (fh->chooseSolution(getAllPossibleSubgoals()));
 }
 
 TGoalVec ClearWayTo::getAllPossibleSubgoals()
@@ -483,9 +491,9 @@ TGoalVec ClearWayTo::getAllPossibleSubgoals()
 
 		//if our hero is trapped, make sure we request clearing the way from OUR perspective
 
-		SectorMap &sm = ai->getCachedSectorMap(h);
+		auto sm = ai->getCachedSectorMap(h);
 
-		int3 tileToHit = sm.firstTileToGet(h, tile);
+		int3 tileToHit = sm->firstTileToGet(h, tile);
 		if (!tileToHit.valid())
 			continue;
 
@@ -574,7 +582,7 @@ TGoalVec Explore::getAllPossibleSubgoals()
 	{
 		//heroes = ai->getUnblockedHeroes();
 		heroes = cb->getHeroesInfo();
-		erase_if (heroes, [](const HeroPtr h)
+		vstd::erase_if(heroes, [](const HeroPtr h)
 		{
 			if (ai->getGoal(h)->goalType == Goals::EXPLORE) //do not reassign hero who is already explorer
 				return true;
@@ -633,11 +641,11 @@ TGoalVec Explore::getAllPossibleSubgoals()
 
 	for (auto h : heroes)
 	{
-		SectorMap &sm = ai->getCachedSectorMap(h);
+		auto sm = ai->getCachedSectorMap(h);
 
 		for (auto obj : objs) //double loop, performance risk?
 		{
-			auto t = sm.firstTileToGet(h, obj->visitablePos()); //we assume that no more than one tile on the way is guarded
+			auto t = sm->firstTileToGet(h, obj->visitablePos()); //we assume that no more than one tile on the way is guarded
 			if (ai->isTileNotReserved(h, t))
 				ret.push_back (sptr(Goals::ClearWayTo(obj->visitablePos(), h).setisAbstract(true)));
 		}
@@ -692,8 +700,8 @@ TSubgoal RecruitHero::whatToDoToAchieve()
 	if(!t)
 		return sptr (Goals::BuildThis(BuildingID::TAVERN));
 
-	if(cb->getResourceAmount(Res::GOLD) < HERO_GOLD_COST)
-		return sptr (Goals::CollectRes(Res::GOLD, HERO_GOLD_COST));
+	if(cb->getResourceAmount(Res::GOLD) < GameConstants::HERO_GOLD_COST)
+		return sptr (Goals::CollectRes(Res::GOLD, GameConstants::HERO_GOLD_COST));
 
 	return iAmElementar();
 }
@@ -746,10 +754,10 @@ TGoalVec VisitTile::getAllPossibleSubgoals()
 		if (ai->canRecruitAnyHero())
 			ret.push_back (sptr(Goals::RecruitHero()));
 	}
-	if (ret.empty())
+	if(ret.empty())
 	{
-		auto obj = frontOrNull(cb->getVisitableObjs(tile));
-		if (obj && obj->ID == Obj::HERO && obj->tempOwner == ai->playerID) //our own hero stands on that tile
+		auto obj = vstd::frontOrNull(cb->getVisitableObjs(tile));
+		if(obj && obj->ID == Obj::HERO && obj->tempOwner == ai->playerID) //our own hero stands on that tile
 		{
 			if (hero.get(true) && hero->id == obj->id) //if it's assigned hero, visit tile. If it's different hero, we can't visit tile now
 				ret.push_back(sptr(Goals::VisitTile(tile).sethero(dynamic_cast<const CGHeroInstance *>(obj)).setisElementar(true)));
@@ -766,7 +774,7 @@ TGoalVec VisitTile::getAllPossibleSubgoals()
 
 TSubgoal DigAtTile::whatToDoToAchieve()
 {
-	const CGObjectInstance *firstObj = frontOrNull(cb->getVisitableObjs(tile));
+	const CGObjectInstance *firstObj = vstd::frontOrNull(cb->getVisitableObjs(tile));
 	if(firstObj && firstObj->ID == Obj::HERO && firstObj->tempOwner == ai->playerID) //we have hero at dest
 	{
 		const CGHeroInstance *h = dynamic_cast<const CGHeroInstance *>(firstObj);
@@ -862,7 +870,7 @@ TSubgoal GatherTroops::whatToDoToAchieve()
 		{
 			auto creatures = vstd::tryAt(t->town->creatures, creature->level - 1);
 			if(!creatures)
-				continue; 
+				continue;
 
 			int upgradeNumber = vstd::find_pos(*creatures, creature->idNumber);
 			if(upgradeNumber < 0)
@@ -957,13 +965,13 @@ TGoalVec Conquer::getAllPossibleSubgoals()
 	std::vector<const CGObjectInstance *> objs;
 	for (auto obj : ai->visitableObjs)
 	{
-		if (conquerable(obj)) 
+		if (conquerable(obj))
 			objs.push_back (obj);
 	}
 
 	for (auto h : cb->getHeroesInfo())
 	{
-		SectorMap &sm = ai->getCachedSectorMap(h);
+		auto sm = ai->getCachedSectorMap(h);
 		std::vector<const CGObjectInstance *> ourObjs(objs); //copy common objects
 
 		for (auto obj : ai->reservedHeroesMap[h]) //add objects reserved by this hero
@@ -974,7 +982,7 @@ TGoalVec Conquer::getAllPossibleSubgoals()
 		for (auto obj : ourObjs)
 		{
 			int3 dest = obj->visitablePos();
-			auto t = sm.firstTileToGet(h, dest); //we assume that no more than one tile on the way is guarded
+			auto t = sm->firstTileToGet(h, dest); //we assume that no more than one tile on the way is guarded
 			if (t.valid()) //we know any path at all
 			{
 				if (ai->isTileNotReserved(h, t)) //no other hero wants to conquer that tile
@@ -1027,11 +1035,15 @@ TSubgoal GatherArmy::whatToDoToAchieve()
 
 	return fh->chooseSolution (getAllPossibleSubgoals()); //find dwelling. use current hero to prevent him from doing nothing.
 }
+
+static const BuildingID unitsSource[] = { BuildingID::DWELL_LVL_1, BuildingID::DWELL_LVL_2, BuildingID::DWELL_LVL_3,
+	BuildingID::DWELL_LVL_4, BuildingID::DWELL_LVL_5, BuildingID::DWELL_LVL_6, BuildingID::DWELL_LVL_7};
+
 TGoalVec GatherArmy::getAllPossibleSubgoals()
 {
 	//get all possible towns, heroes and dwellings we may use
 	TGoalVec ret;
-	
+
 	//TODO: include evaluation of monsters gather in calculation
 	for (auto t : cb->getTownsInfo())
 	{
@@ -1052,7 +1064,7 @@ TGoalVec GatherArmy::getAllPossibleSubgoals()
 
 	auto otherHeroes = cb->getHeroesInfo();
 	auto heroDummy = hero;
-	erase_if(otherHeroes, [heroDummy](const CGHeroInstance * h)
+	vstd::erase_if(otherHeroes, [heroDummy](const CGHeroInstance * h)
 	{
 		return (h == heroDummy.h || !ai->isAccessibleForHero(heroDummy->visitablePos(), h, true)
 			|| !ai->canGetArmy(heroDummy.h, h) || ai->getGoal(h)->goalType == Goals::GATHER_ARMY);
@@ -1093,11 +1105,11 @@ TGoalVec GatherArmy::getAllPossibleSubgoals()
 	}
 	for(auto h : cb->getHeroesInfo())
 	{
-		SectorMap &sm = ai->getCachedSectorMap(h);
+		auto sm = ai->getCachedSectorMap(h);
 		for (auto obj : objs)
 		{ //find safe dwelling
 			auto pos = obj->visitablePos();
-			if (ai->isGoodForVisit(obj, h, sm))
+			if (ai->isGoodForVisit(obj, h, *sm))
 				ret.push_back (sptr (Goals::VisitTile(pos).sethero(h)));
 		}
 	}

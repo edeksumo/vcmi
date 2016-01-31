@@ -17,6 +17,7 @@
 #include "../NetPacks.h"
 #include "../IGameCallback.h"
 #include "../CGameState.h"
+#include "../CPlayerState.h"
 
 #include "CObjectClassesHandler.h"
 
@@ -98,7 +99,7 @@ void CRewardableObject::onHeroVisit(const CGHeroInstance *h) const
 			iw.player = h->tempOwner;
 			iw.soundID = soundID;
 			iw.text = info[index].message;
-			info[index].reward.loadComponents(iw.components);
+			info[index].reward.loadComponents(iw.components, h);
 			cb->showInfoDialog(&iw);
 		}
 		// grant reward afterwards. Note that it may remove object
@@ -111,7 +112,7 @@ void CRewardableObject::onHeroVisit(const CGHeroInstance *h) const
 		sd.soundID = soundID;
 		sd.text = onSelect;
 		for (auto index : rewards)
-			sd.components.push_back(info[index].reward.getDisplayedComponent());
+			sd.components.push_back(info[index].reward.getDisplayedComponent(h));
 		cb->showBlockingDialog(&sd);
 	};
 
@@ -340,19 +341,24 @@ bool CRewardableObject::wasVisited (const CGHeroInstance * h) const
 	}
 }
 
-void CRewardInfo::loadComponents(std::vector<Component> & comps) const
+void CRewardInfo::loadComponents(std::vector<Component> & comps,
+                                 const CGHeroInstance * h) const
 {
 	for (auto comp : extraComponents)
 		comps.push_back(comp);
 
-	if (gainedExp)    comps.push_back(Component(Component::EXPERIENCE, 0, gainedExp, 0));
+	if (gainedExp)
+	{
+		comps.push_back(Component(
+			Component::EXPERIENCE, 0, h->calculateXp(gainedExp), 0));
+	}
 	if (gainedLevels) comps.push_back(Component(Component::EXPERIENCE, 0, gainedLevels, 0));
 
-	if (manaDiff)   comps.push_back(Component(Component::PRIM_SKILL, 5, manaDiff,   0));
+	if (manaDiff) comps.push_back(Component(Component::PRIM_SKILL, 5, manaDiff, 0));
 
 	for (size_t i=0; i<primary.size(); i++)
 	{
-		if (primary[i] !=0)
+		if (primary[i] != 0)
 			comps.push_back(Component(Component::PRIM_SKILL, i, primary[i], 0));
 	}
 
@@ -375,10 +381,10 @@ void CRewardInfo::loadComponents(std::vector<Component> & comps) const
 	}
 }
 
-Component CRewardInfo::getDisplayedComponent() const
+Component CRewardInfo::getDisplayedComponent(const CGHeroInstance * h) const
 {
 	std::vector<Component> comps;
-	loadComponents(comps);
+	loadComponents(comps, h);
 	assert(!comps.empty());
 	return comps.front();
 }
@@ -421,7 +427,7 @@ void CRewardableObject::setPropertyDer(ui8 what, ui32 val)
 
 void CRewardableObject::newTurn() const
 {
-	if (resetDuration != 0 && cb->getDate(Date::DAY) > 1 && cb->getDate(Date::DAY) % (resetDuration) == 1)
+	if (resetDuration != 0 && cb->getDate(Date::DAY) > 1 && (cb->getDate(Date::DAY) % resetDuration) == 1)
 		cb->setObjProperty(id, ObjProperty::REWARD_RESET, 0);
 }
 
@@ -495,6 +501,7 @@ void CGPickable::initObj()
 					info.resize(1);
 					info[0].message.addTxt(MetaString::ADVOB_TXT, 51);
 					info[0].reward.removeObject = true;
+					break;
 			case 1:
 				{
 					info.resize(1);
@@ -681,7 +688,6 @@ void CGBonusingObject::initObj()
 			info[i].message.addTxt(MetaString::ADVOB_TXT, 62);
 			soundID = soundBase::experience;
 		}
-		onVisited.addTxt(MetaString::ADVOB_TXT, 63);
 		info.back().limiter.dayOfWeek = 7;
 		configureBonus(info.back(), Bonus::MORALE, 1, 68); // on last day of week
 		configureBonus(info.back(), Bonus::LUCK,   1, 68);
@@ -1002,14 +1008,28 @@ void CGVisitableOPW::initObj()
 		soundID = soundBase::GENIE;
 		onEmpty.addTxt(MetaString::ADVOB_TXT, 165);
 
-		info.resize(2);
-		info[0].limiter.dayOfWeek = 7; // double amount on sunday
-		info[0].reward.resources[Res::GOLD] = 1000;
-		info[1].reward.resources[Res::GOLD] = 500;
+		info.resize(1);
+		info[0].reward.resources[Res::GOLD] = 500;
 		info[0].message.addTxt(MetaString::ADVOB_TXT, 164);
-		info[1].message.addTxt(MetaString::ADVOB_TXT, 164);
 		break;
 	}
+}
+
+void CGVisitableOPW::setPropertyDer(ui8 what, ui32 val)
+{
+	if(ID == Obj::WATER_WHEEL && what == ObjProperty::REWARD_RESET)
+	{
+		auto& reward = info[0].reward.resources[Res::GOLD];
+		if(info[0].numOfGrants == 0)
+		{
+			reward = 1000;
+		}
+		else
+		{
+			reward = 500;
+		}
+	}
+	CRewardableObject::setPropertyDer(what, val);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

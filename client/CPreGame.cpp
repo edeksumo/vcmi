@@ -307,10 +307,10 @@ void CMenuScreen::switchToTab(size_t index)
 //funciton for std::string -> std::function conversion for main menu
 static std::function<void()> genCommand(CMenuScreen* menu, std::vector<std::string> menuType, const std::string &string)
 {
-	static const std::vector<std::string> commandType  = 
+	static const std::vector<std::string> commandType  =
 		{"to", "campaigns", "start", "load", "exit", "highscores"};
 
-	static const std::vector<std::string> gameType = 
+	static const std::vector<std::string> gameType =
 		{"single", "multi", "campaign", "tutorial"};
 
 	std::list<std::string> commands;
@@ -554,8 +554,8 @@ CGPreGame *CGPreGame::create()
 {
 	if(!CGP)
 		CGP = new CGPreGame();
-		
-	GH.terminate_cond.set(false);		
+
+	GH.terminate_cond.set(false);
 	return CGP;
 }
 
@@ -1151,7 +1151,7 @@ void SelectionTab::parseGames(const std::unordered_set<ResourceID> &files, bool 
 			lf >> *(mapInfo.mapHeader.get()) >> mapInfo.scenarioOpts;
 			mapInfo.fileURI = file.getName();
 			mapInfo.countPlayers();
-			std::time_t time = CFileInfo(*CResourceHandler::get()->getResourceName(file)).getDate();
+			std::time_t time = boost::filesystem::last_write_time(*CResourceHandler::get()->getResourceName(file));
 			mapInfo.date = std::asctime(std::localtime(&time));
 
 			// If multi mode then only multi games, otherwise single
@@ -1362,9 +1362,9 @@ void SelectionTab::select( int position )
 
 	if(txt)
 	{
-		std::string filename = *CResourceHandler::get("local")->getResourceName(
+		auto filename = *CResourceHandler::get("local")->getResourceName(
 								   ResourceID(curItems[py]->fileURI, EResType::CLIENT_SAVEGAME));
-		txt->setText(CFileInfo(filename).getBaseName());
+		txt->setText(filename.stem().string());
 	}
 
 	onSelect(curItems[py]);
@@ -1487,8 +1487,8 @@ void SelectionTab::printMaps(SDL_Surface *to)
 		}
 		else
 		{
-			name = CFileInfo(*CResourceHandler::get("local")->getResourceName(
-								 ResourceID(currentItem->fileURI, EResType::CLIENT_SAVEGAME))).getBaseName();
+			name = CResourceHandler::get("local")->getResourceName(
+								 ResourceID(currentItem->fileURI, EResType::CLIENT_SAVEGAME))->stem().string();
 		}
 
 		//print name
@@ -1875,9 +1875,9 @@ void CRandomMapTab::updateMapInfo()
 
 	// Generate player information
 	mapInfo->mapHeader->players.clear();
-	int playersToGen = (mapGenOptions.getPlayerCount() == CMapGenOptions::RANDOM_SIZE
-		|| mapGenOptions.getCompOnlyPlayerCount() == CMapGenOptions::RANDOM_SIZE)
-			? 8 : mapGenOptions.getPlayerCount() + mapGenOptions.getCompOnlyPlayerCount();
+	int playersToGen = PlayerColor::PLAYER_LIMIT_I;
+	if(mapGenOptions.getPlayerCount() != CMapGenOptions::RANDOM_SIZE)
+		playersToGen = mapGenOptions.getPlayerCount();
 	mapInfo->mapHeader->howManyTeams = playersToGen;
 
 	for(int i = 0; i < playersToGen; ++i)
@@ -1885,7 +1885,8 @@ void CRandomMapTab::updateMapInfo()
 		PlayerInfo player;
 		player.isFactionRandom = true;
 		player.canComputerPlay = true;
-		if(i >= mapGenOptions.getPlayerCount() && mapGenOptions.getPlayerCount() != CMapGenOptions::RANDOM_SIZE)
+		if(mapGenOptions.getCompOnlyPlayerCount() != CMapGenOptions::RANDOM_SIZE &&
+			i >= mapGenOptions.getHumanOnlyPlayerCount())
 		{
 			player.canHumanPlay = false;
 		}
@@ -1917,7 +1918,7 @@ const CMapGenOptions & CRandomMapTab::getMapGenOptions() const
 	return mapGenOptions;
 }
 
-void CRandomMapTab::setMapGenOptions(shared_ptr<CMapGenOptions> opts)
+void CRandomMapTab::setMapGenOptions(std::shared_ptr<CMapGenOptions> opts)
 {
 	mapSizeBtnGroup->setSelected(vstd::find_pos(getPossibleMapSizes(), opts->getWidth()));
 	twoLevelsBtn->setSelected(opts->getHasTwoLevels());
@@ -3290,14 +3291,14 @@ void CBonusSelection::init()
 	sFlags = CDefHandler::giveDef("ITGFLAGS.DEF");
 }
 
-CBonusSelection::CBonusSelection(shared_ptr<CCampaignState> _ourCampaign) : ourCampaign(_ourCampaign)
+CBonusSelection::CBonusSelection(std::shared_ptr<CCampaignState> _ourCampaign) : ourCampaign(_ourCampaign)
 {
 	init();
 }
 
 CBonusSelection::CBonusSelection(const std::string & campaignFName)
 {
-	ourCampaign = make_shared<CCampaignState>(CCampaignHandler::getCampaign(campaignFName));
+	ourCampaign = std::make_shared<CCampaignState>(CCampaignHandler::getCampaign(campaignFName));
 	init();
 }
 

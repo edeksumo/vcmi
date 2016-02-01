@@ -223,7 +223,7 @@ DLL_LINKAGE void FoWChange::applyGs( CGameState *gs )
 				case Obj::TOWN:
 				case Obj::ABANDONED_MINE:
 					if(vstd::contains(team->players, o->tempOwner)) //check owned observators
-						gs->getTilesInRange(tilesRevealed, o->getSightCenter(), o->getSightRadious(), o->tempOwner, 1);
+						gs->getTilesInRange(tilesRevealed, o->getSightCenter(), o->getSightRadius(), o->tempOwner, 1);
 					break;
 				}
 			}
@@ -1633,7 +1633,7 @@ DLL_LINKAGE void BattleStackAdded::applyGs(CGameState *gs)
 	}
 
 	CStackBasicDescriptor csbd(creID, amount);
-	CStack * addedStack = gs->curB->generateNewStack(csbd, attacker, SlotID(255), pos); //TODO: netpacks?
+	CStack * addedStack = gs->curB->generateNewStack(csbd, attacker, SlotID::SUMMONED_SLOT_PLACEHOLDER, pos); //TODO: netpacks?
 	if (summoned)
 		addedStack->state.insert(EBattleStackState::SUMMONED);
 
